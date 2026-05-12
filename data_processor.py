@@ -1,3 +1,4 @@
+from __future__ import annotations
 from datetime import datetime
 import pandas as pd
 from instagram_api import InstagramAPI

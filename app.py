@@ -3,6 +3,7 @@ Instagram インサイト ダッシュボード
 起動: streamlit run app.py
 """
 
+import os
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -10,8 +11,20 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime
 
-from instagram_api import InstagramAPI
 from data_processor import fetch_account_insights_df, fetch_posts_df, compute_summary, export_to_excel
+import demo_data as demo
+
+# ── デモモード判定 ─────────────────────────────────────────────────────────────
+def _has_credentials() -> bool:
+    token = os.getenv("INSTAGRAM_ACCESS_TOKEN")
+    if not token:
+        try:
+            token = st.secrets.get("INSTAGRAM_ACCESS_TOKEN")
+        except Exception:
+            pass
+    return bool(token)
+
+IS_DEMO = not _has_credentials()
 
 # ── ページ設定 ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -32,16 +45,32 @@ st.markdown(
     }
     .metric-value { font-size: 2rem; font-weight: 700; }
     .metric-label { font-size: 0.85rem; opacity: 0.9; margin-top: 4px; }
+    .demo-banner {
+        background: linear-gradient(90deg, #f093fb, #f5576c);
+        color: white; padding: 10px 18px; border-radius: 8px;
+        font-weight: 600; text-align: center; margin-bottom: 8px;
+    }
     .stAlert { border-radius: 8px; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
+# ── デモバナー ─────────────────────────────────────────────────────────────────
+if IS_DEMO:
+    st.markdown(
+        '<div class="demo-banner">🎭 DEMO MODE — サンプルデータで動作しています。'
+        '実アカウントに接続するには Instagram API トークンを設定してください。</div>',
+        unsafe_allow_html=True,
+    )
+
 # ── サイドバー ─────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.image("https://upload.wikimedia.org/wikipedia/commons/a/a5/Instagram_icon.png", width=60)
     st.title("設定")
+
+    if IS_DEMO:
+        st.info("デモモード稼働中\n\nAPIトークンを設定すると実データに切り替わります。")
 
     days = st.slider("取得期間（日数）", min_value=7, max_value=90, value=30, step=1)
     post_limit = st.slider("取得投稿数", min_value=10, max_value=100, value=30, step=5)
@@ -53,9 +82,10 @@ with st.sidebar:
     st.caption("Instagram Graph API v20.0")
     st.caption(f"最終更新: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
 
-# ── データ取得（キャッシュ付き） ──────────────────────────────────────────────
+# ── データ取得 ────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=900, show_spinner=False)
-def load_data(days: int, post_limit: int):
+def load_live_data(days: int, post_limit: int):
+    from instagram_api import InstagramAPI
     api = InstagramAPI()
     account_info = api.get_account_info()
     insights_frames = fetch_account_insights_df(api, days=days)
@@ -65,19 +95,28 @@ def load_data(days: int, post_limit: int):
     return account_info, insights_frames, posts_df, summary, demographics
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_demo_data(days: int, post_limit: int):
+    account_info = demo.get_demo_account_info()
+    insights_frames = demo.get_demo_account_insights(days=days)
+    posts_df = demo.get_demo_posts_df(limit=post_limit)
+    summary = compute_summary(account_info, insights_frames, posts_df)
+    demographics = demo.get_demo_demographics()
+    return account_info, insights_frames, posts_df, summary, demographics
+
+
 if refresh:
     st.cache_data.clear()
 
-# ── 初期化チェック ─────────────────────────────────────────────────────────────
-try:
-    with st.spinner("Instagram データを取得中..."):
-        account_info, insights_frames, posts_df, summary, demographics = load_data(days, post_limit)
-except ValueError as e:
-    st.error(f"設定エラー: {e}")
-    st.info("プロジェクトルートに `.env` ファイルを作成し、`.env.example` を参考に設定してください。")
-    st.stop()
-except Exception as e:
-    st.error(f"API エラー: {e}")
+if IS_DEMO:
+    account_info, insights_frames, posts_df, summary, demographics = load_demo_data(days, post_limit)
+else:
+    try:
+        with st.spinner("Instagram データを取得中..."):
+            account_info, insights_frames, posts_df, summary, demographics = load_live_data(days, post_limit)
+    except Exception as e:
+        st.error(f"API エラー: {e}")
+        st.stop()
     st.stop()
 
 # ── ヘッダー ──────────────────────────────────────────────────────────────────
